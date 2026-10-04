@@ -3,6 +3,7 @@ import os, re, csv, json, math, sqlite3, hashlib, io
 from datetime import datetime, timezone
 from pathlib import Path
 from flask import Flask, request, jsonify, Response
+from ai_engine import rank as ai_rank, enabled as ai_enabled
 
 BASE=Path(__file__).resolve().parent
 DB=Path(os.environ.get("DB_PATH", BASE/"app.db"))
@@ -283,7 +284,15 @@ INDEX_HTML = '<!doctype html>\n<html lang="id">\n<head>\n<meta charset="utf-8">\
 def index(): return Response(INDEX_HTML, mimetype="text/html")
 
 @app.get("/api/dashboard")
-def api_dashboard(): return jsonify(dashboard())
+def api_dashboard():
+    d=dashboard()
+    d["ai_enabled"]=ai_enabled()
+    d["ai_model"]=os.environ.get("OPENAI_MODEL","gpt-6-luna")
+    return jsonify(d)
+
+@app.get("/api/ai-status")
+def api_ai_status():
+    return jsonify(enabled=ai_enabled(), model=os.environ.get("OPENAI_MODEL","gpt-6-luna"))
 
 @app.post("/api/upload-history")
 def upload_history():
@@ -380,7 +389,8 @@ def add_result():
     conn.commit(); conn.close()
     # Persist a run corresponding to the NEW cutoff prediction
     h2=get_history()
-    pred=generate(h2,get_map())
+    deterministic=generate(h2,get_map())
+    pred=ai_rank(h2, deterministic, get_map(), audit) or deterministic
     conn=db()
     cur=conn.execute("INSERT INTO runs(cutoff_result,main,backups,bbfs,candidates,created_at) VALUES(?,?,?,?,?,?)",
                      (result,pred["main"],json.dumps(pred["backups"]),pred["bbfs"],json.dumps(pred["candidates"]),now()))
@@ -391,7 +401,7 @@ def add_result():
                      (run_id,result,audit["main_exact"],audit["main_reverse"],audit["top3_exact"],audit["top5_exact"],audit["top5_mixed"],
                       audit["head_exact"],audit["tail_exact"],audit["bbfs_hit"],audit["bbfs_unique"],now()))
     conn.commit(); conn.close()
-    return jsonify(ok=True,audit=audit,prediction=pred,dashboard=dashboard())
+    return jsonify(ok=True,audit=audit,prediction=pred,deterministic_prediction=deterministic,ai_enabled=ai_enabled(),dashboard=dashboard())
 
 @app.get("/api/mapping")
 def api_mapping(): return jsonify(get_map())
